@@ -1,12 +1,10 @@
 package net.unicon.idp.authn.provider.extra;
 
 import net.shibboleth.idp.authn.ExternalAuthentication;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletRequest;
-import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Generates a querystring parameter containing the entityId
@@ -14,7 +12,6 @@ import java.net.URLEncoder;
  * @author jgasper@unicon.net
  */
 public class EntityIdParameterBuilder implements IParameterBuilder {
-    private final Logger logger = LoggerFactory.getLogger(EntityIdParameterBuilder.class);
 
     @Override
     public String getParameterString(final HttpServletRequest request, final String authenticationKey) {
@@ -24,14 +21,10 @@ public class EntityIdParameterBuilder implements IParameterBuilder {
     public String getParameterString(final HttpServletRequest request, final boolean encode) {
         final String relayingPartyId = request.getAttribute(ExternalAuthentication.RELYING_PARTY_PARAM).toString();
 
-        String rpId = "error-encoding-rpid";
+        final String rpId;
 
         if (encode) {
-            try {
-                rpId = URLEncoder.encode(relayingPartyId, "UTF-8");
-            } catch (final UnsupportedEncodingException e) {
-                logger.error("Error encoding the relying party id.", e);
-            }
+            rpId = URLEncoder.encode(relayingPartyId, StandardCharsets.UTF_8);
         } else {
             rpId = relayingPartyId;
         }

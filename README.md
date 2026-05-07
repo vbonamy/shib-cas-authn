@@ -82,9 +82,10 @@ shibcas.casServerLoginUrl = ${shibcas.casServerUrlPrefix}/login
 ## Shibboleth Server Properties
 shibcas.serverName = https://shibserver.example.edu
 
-# By default you always get the AuthenticatedNameTranslator, add additional code to cover your custom needs.
-# Takes a comma separated list of fully qualified class names
+# By default AuthenticatedNameTranslator, CasRefedsAuthnMethodTranslator and CasRefedsAuthnMethodParameterBuilder are always active.
+# To add extra translators (semicolon-separated fully qualified class names):
 # shibcas.casToShibTranslators = com.your.institution.MyCustomNamedTranslatorClass
+# To replace the default parameter builders (semicolon-separated fully qualified class names):
 # shibcas.parameterBuilders = com.your.institution.MyParameterBuilderClass
 
 # Specify CAS validator to use - either 'cas10', 'cas20' or 'cas30' (default)
@@ -94,6 +95,9 @@ shibcas.serverName = https://shibserver.example.edu
 # Specify if the Relying Party/Service Provider entityId should be appended as a separate entityId query string parameter
 # or embedded in the "service" querystring parameter - `append` (default) or `embed`
 # shibcas.entityIdLocation = append
+# CAS MFA provider name used for REFEDS MFA profile support (see section below).
+# If not set, the REFEDS MFA translator is loaded but inactive (no-op).
+# shibcas.casAuthnContextClass = mfa-esupotp
 ...
 ```
 
@@ -115,40 +119,113 @@ will match as two different entries in the service registry which will allow as 
 OPTIONAL Handling REFEDS MFA Profile
 ---------------------------------------------------------------
 
-The plugin has native support for [REFEDS MFA profile](https://refeds.org/profile/mfa). The requested authentication context class that is `https://refeds.org/profile/mfa`
-is passed along from the Shibboleth IdP over to this plugin and is then translated to a multifactor authentication strategy supported by and configured CAS (i.e. Duo Security). 
-The CAS server is notified of the required authentication method via a special `authn_method` parameter by default. Once a service ticket is issued and plugin begins to
-validate the service ticket, it will attempt to ensure that the CAS-produced validation payload contains and can successfully assert the required/requested
-authentication context class.
+The plugin has native support for the [REFEDS MFA profile](https://refeds.org/profile/mfa). The requested authentication context class `https://refeds.org/profile/mfa`
+is passed from the Shibboleth IdP to this plugin and translated into a multifactor authentication strategy supported by CAS.
+The CAS server is notified of the required authentication method via a special `authn_method` parameter appended to the CAS login URL.
+Once a service ticket is issued, the plugin validates that the CAS assertion contains and asserts the expected authentication context class.
 
-The supported multifactor authentication providers are listed below:
+Any CAS MFA provider is supported (e.g. `mfa-simple`, `mfa-esupotp`, `mfa-duo`, `mfa-gauth`, `mfa-yubikey`, …); configure the provider name via `shibcas.casAuthnContextClass`.
 
-- Duo Security  (Requesting `authn_method=mfa-duo` and expecting validation payload attribute `authnContextClass=mfa-duo`)
+The two components involved are symmetric:
 
+| Direction | Class | Role |
+|-----------|-------|------|
+| IdP → CAS (request) | `CasRefedsAuthnMethodParameterBuilder` | appends `&authn_method=<value>` to the CAS login URL |
+| CAS → IdP (response) | `CasRefedsAuthnMethodTranslator` | translates the CAS assertion's `authnContextClass` back to the REFEDS URI |
+
+Both read the same `shibcas.casAuthnContextClass` property and are both a **no-op** when it is absent, ensuring consistent behaviour in either direction.
 
 #### REFEDS MFA Profile Configuration
 
-In the `IDP_HOME/conf/idp.properties` file, ensure the following settings are set:
+The REFEDS translator and parameter builder are **loaded by default** but remain **inactive (no-op)** until `shibcas.casAuthnContextClass` is set.
+A message is logged at `INFO` level at startup when the property is missing.
+
+In `IDP_HOME/conf/idp.properties`, set the CAS MFA provider name:
 
 ```properties
-shibcas.casToShibTranslators = net.unicon.idp.externalauth.CasDuoSecurityRefedsAuthnMethodTranslator
-shibcas.parameterBuilders = net.unicon.idp.authn.provider.extra.CasMultifactorRefedsToDuoSecurityAuthnMethodParameterBuilder
+# If not set, the REFEDS MFA translator is loaded but inactive (no-op).
+shibcas.casAuthnContextClass = mfa-esupotp
 ```
 
-Finally add the desired authn context refs in the supported principals property list to `idp.authn.External` in `IDP_HOME/conf/authn/authn.properties` as shown below. 
+Then add the desired authn context refs to `authn/External` in `authn/general-authn.xml`:
 
+```xml
+<bean id="authn/External" parent="shibboleth.AuthenticationFlow"
+      p:passiveAuthenticationSupported="true"
+      p:forcedAuthenticationSupported="true"
+      p:nonBrowserSupported="false">
+  <property name="supportedPrincipals">
+    <list>
+      <bean parent="shibboleth.SAML2AuthnContextClassRef" c:classRef="https://refeds.org/profile/mfa"/>
+      <bean parent="shibboleth.SAML2AuthnContextClassRef" c:classRef="urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport"/>
+      <bean parent="shibboleth.SAML2AuthnContextClassRef" c:classRef="urn:oasis:names:tc:SAML:2.0:ac:classes:Password"/>
+      <bean parent="shibboleth.SAML1AuthenticationMethod"  c:method="urn:oasis:names:tc:SAML:1.0:am:password"/>
+    </list>
+  </property>
+</bean>
 ```
-idp.authn.External.supportedPrincipals = \
-    saml2/https://refeds.org/profile/sfa, \
-    saml2/urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport, \
-    saml2/urn:oasis:names:tc:SAML:2.0:ac:classes:Password, \
-    saml1/urn:oasis:names:tc:SAML:1.0:am:password
 
+#### REFEDS MFA Profile Configuration on Shibboleth SP
+
+This part of documentation is out of scope of the plugin but provided here for convenience.
+The SP 
+* needs to request the `https://refeds.org/profile/mfa` authentication context class ref for the IdP to trigger the CAS MFA flow.
+* and must verify that the AuthnContextClassRef in the SAML assertion matches the requested context class, it reject responses that do not meet this requirement.
+
+For example : 
+```
+  <Location />
+     AuthType shibboleth
+     ShibRequestSetting requireSession 1
+     # request the REFEDS MFA profile authn context class ref to trigger the CAS MFA flow in the plugin
+     ShibRequestSetting authnContextClassRef https://refeds.org/profile/mfa
+     <RequireAll>
+      # verify that the CAS assertion contains the expected authn context class ref, otherwise reject the response
+      require authnContextClassRef https://refeds.org/profile/mfa
+      require valid-user
+     </RequireAll>
+     # error page when the assertion does not contain the expected authn context class ref
+     # (e.g. because the user did not complete MFA, because of a misconfiguration, because url without the authn_method parameter, ...)
+     ErrorDocument 401 /errors/mfa-is-required.html
+  </Location>
+  <Location /errors>
+     AuthType none
+     require all granted
+  </Location>
+```
+
+Note that if the IdP selected for authentication (chosen on the Discovery Service, for example) does not support the REFEDS MFA profile, 
+the SP will directly reject the user by redirecting them to an `opensaml::FatalProfileException` error page. 
+Therefore, if you know that some IdPs in your federation do not support the REFEDS MFA profile, 
+you may want to provide a more user-friendly error page by setting the `<Errors>` element in shibboleth2.xml.
+
+For example : 
+```
+<Errors supportContact="support@example.org"
+        redirectErrors="https://sp-mfa.example.org/errors/saml-error.html" />
+```
+With saml-error.html like :
+```
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Authentication Error</h1>
+    <div id="msg">An error occurred during authentication.</div>
+    <script>
+      const p = new URLSearchParams(window.location.search);
+      const sub = p.get('statusCode2') || '';
+      if (sub.includes('NoAuthnContext')) {
+        document.getElementById('msg').textContent =
+          "Your institution does not support the Multi-Factor Authentication (MFA) required to access this service. Please contact your IT support.";
+      }
+    </script>
+  </body>
+</html>
 ```
 
 Release Notes
 -------------------------------------------------------------
-See [here](https://github.com/Unicon/shib-cas-authn/releases/).
+See [here](https://github.com/renater/shib-cas-authn/releases/).
 
 Developer Notes
 -------------------------------------------------------------

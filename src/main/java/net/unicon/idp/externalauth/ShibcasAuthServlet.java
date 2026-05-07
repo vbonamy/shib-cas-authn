@@ -30,6 +30,7 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.io.Serial;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -45,25 +46,23 @@ import java.util.Set;
 @WebServlet(name = "ShibcasAuthServlet", urlPatterns = {"/Authn/External/*"})
 public class ShibcasAuthServlet extends HttpServlet {
     private final Logger logger = LoggerFactory.getLogger(ShibcasAuthServlet.class);
-    private static final long serialVersionUID = 1L;
+    private static final @Serial long serialVersionUID = 1L;
     private static final String artifactParameterName = "ticket";
     private static final String serviceParameterName = "service";
 
     private String casLoginUrl;
     private String serverName;
-    private String casServerPrefix;
     private String ticketValidatorName;
     private String entityIdLocation;
     private String casServerValidatorPrefix;
 
     private AbstractCasProtocolUrlBasedTicketValidator ticketValidator;
 
-    private final Set<CasToShibTranslator> translators = new HashSet<CasToShibTranslator>();
-    private final Set<IParameterBuilder> parameterBuilders = new HashSet<IParameterBuilder>();
+    private final Set<CasToShibTranslator> translators = new HashSet<>();
+    private final Set<IParameterBuilder> parameterBuilders = new HashSet<>();
 
     @Override
-    protected void doGet(final HttpServletRequest request, final HttpServletResponse response) throws ServletException {
-        // TODO: We have the opportunity to give back more to Shib than just the PRINCIPAL_NAME_KEY. Identify additional information
+    protected void doGet(final HttpServletRequest request, final HttpServletResponse response) throws IOException {
         try {
             final String ticket = WebUtils.safeGetParameter(request, artifactParameterName);
             final String gatewayAttempted = WebUtils.safeGetParameter(request, "gatewayAttempted");
@@ -198,7 +197,7 @@ public class ShibcasAuthServlet extends HttpServlet {
     private void parseProperties(final Environment environment) {
         logger.debug("reading properties from the idp.properties file");
 
-        casServerPrefix = environment.getRequiredProperty("shibcas.casServerUrlPrefix");
+        final String casServerPrefix = environment.getRequiredProperty("shibcas.casServerUrlPrefix");
         logger.debug("shibcas.casServerUrlPrefix: {}", casServerPrefix);
 
         casLoginUrl = environment.getRequiredProperty("shibcas.casServerLoginUrl");
@@ -219,12 +218,13 @@ public class ShibcasAuthServlet extends HttpServlet {
 
     private void buildParameterBuilders(final ApplicationContext applicationContext) {
         final Environment environment = applicationContext.getEnvironment();
-        final String builders = StringUtils.defaultString(environment.getProperty("shibcas.parameterBuilders", ""));
+        final String builders = StringUtils.defaultString(environment.getProperty("shibcas.parameterBuilders",
+            "net.unicon.idp.authn.provider.extra.CasRefedsAuthnMethodParameterBuilder"));
         for (final String parameterBuilder : StringUtils.split(builders, ";")) {
             try {
                 logger.debug("Loading parameter builder class {}", parameterBuilder);
                 final Class<?> clazz = Class.forName(parameterBuilder);
-                final IParameterBuilder builder = IParameterBuilder.class.cast(clazz.getDeclaredConstructor().newInstance());
+                final IParameterBuilder builder = (IParameterBuilder) clazz.getDeclaredConstructor().newInstance();
                 if (builder instanceof ApplicationContextAware) {
                     ((ApplicationContextAware) builder).setApplicationContext(applicationContext);
                 }
@@ -237,11 +237,17 @@ public class ShibcasAuthServlet extends HttpServlet {
     }
 
     /**
-     * Attempt to build the set of translators from the fully qualified class names set in the properties. If nothing has been set
-     * then default to the AuthenticatedNameTranslator only.
+     * Build the set of translators. {@link AuthenticatedNameTranslator} and
+     * {@link CasRefedsAuthnMethodTranslator} are always active by default.
+     * Additional translators can be registered via the {@code shibcas.casToShibTranslators}
+     * property (semicolon-separated fully-qualified class names).
      */
     private void buildTranslators(final Environment environment) {
         translators.add(new AuthenticatedNameTranslator());
+
+        final CasRefedsAuthnMethodTranslator refedsTranslator = new CasRefedsAuthnMethodTranslator();
+        refedsTranslator.setEnvironment(environment);
+        translators.add(refedsTranslator);
 
         final String casToShibTranslators = StringUtils.defaultString(environment.getProperty("shibcas.casToShibTranslators", ""));
         for (final String classname : StringUtils.split(casToShibTranslators, ';')) {
@@ -280,7 +286,7 @@ public class ShibcasAuthServlet extends HttpServlet {
      * in which case we should not modify the service URL returned by CAS WebUtils; this
      * avoids appending the entity ID twice when entityIdLocation=embed, since the ID is already
      * embedded in the string during validation.
-     * @throws TicketValidationException
+     * @throws TicketValidationException if the entityId embedded in the service URL has been tampered with
      */
     protected String constructServiceUrl(final HttpServletRequest request, final HttpServletResponse response, final boolean isValidatingTicket) throws TicketValidationException {
         if(isValidatingTicket && "embed".equalsIgnoreCase(entityIdLocation)) {

@@ -83,7 +83,7 @@ public class AuthenticatedNameTranslator implements CasToShibTranslator {
             try {
                 final List<IdPAttributeValue> attributeValues = new ArrayList<>();
                 if (entry.getValue() instanceof Collection) {
-                    for (final Object value : (Collection) entry.getValue()) {
+                    for (final Object value : (Collection<?>) entry.getValue()) {
                         final String attributeValue = value.toString();
                         if (attributeValue.trim().isEmpty()) {
                             logger.warn("Skipping attribute {} with empty value(s)", entry.getKey());
