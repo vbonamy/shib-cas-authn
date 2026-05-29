@@ -14,12 +14,13 @@ Maintenance Status
 
 Please note that Unicon will no longer be upgrading nor maintaining this plugin any longer. That decision is based on best practices concerning the modern Shibboleth and CAS Server software packages. The Shibboleth IdP and the CAS Server support the same SSO protocols, and the best strategy is to decide which of those two SSO packages best meets your needs and only keep that one, migrating all services to it. If,for whatever reason, both SSO solutions are still required, the recommended approach is to use SAML (authentication) delegation to achieve the same results that this plugin provides now.
 
+However, this fork of the plugin is maintained by [Renater]([Renater](https://www.renater.fr). It provides integration of Apereo CAS MFA features into the Shibboleth IdP via the REFEDS MFA profile, features unavailable in the original plugin and, to our knowledge, not (easily) achievable through SAML delegation either.
 
 Software Requirements
 -------------------------------------------------------------
 
 This minimum supported version of Shibboleth Identity Provider is `5.2.1`.
-See [releases](https://github.com/Unicon/shib-cas-authn/releases) to find the the appropriate version.
+See [releases](https://github.com/Renater/shib-cas-authn/releases) to find the the appropriate version.
 
 
 Installation
@@ -27,21 +28,14 @@ Installation
 
 #### Overview
 
-- Download and extract the "latest release" zip or tar [from releases](https://github.com/Unicon/shib-cas-authn/releases).
+- Download and extract the "latest release" zip or tar [from releases](https://github.com/Renater/shib-cas-authn/releases).
 - Copy the no-conversation-state.jsp file (also found inside this repo in IDP_HOME/edit-webapp) to your IdP's `IDP_HOME/edit-webapp`
 - Copy two included jar files (`cas-client-core-x.x.x.jar` and `shib-cas-authenticator-x.x.x.jar`) into the `IDP_HOME/edit-webapp/WEB-INF/lib`.
 - Copy and Update the IdP's `web.xml`.
 - Update the IdP's `authn.properties` file.
 - Rebuild the war file.
 
-**NOTE:** You should **ALWAYS** refers to the `README.md` file that is [packaged with the release](https://github.com/Unicon/shib-cas-authn/releases) for instructions.
-
-
-#### Update the IdP's authn.properties file
-
-In the `IDP_HOME/conf/authn/authn.properties` file, ensure the context path points to `Authn/External` as shown below.
-
-```
+**NOTE:** You should **ALWAYS** refers to the `README.md` file that is [packaged with the release](https://github.com/Renater/shib-cas-authn/releases) for instructions.
 
 #### Update the IdP's authn.properties file
 
@@ -88,9 +82,9 @@ From the `IDP_HOME/bin` directory, run `./build.sh` or `build.bat` to rebuild th
 #### OPTIONAL EntityId / CAS Service Passing
 By setting `shibcas.entityIdLocation=embed`, shib-cas-authn will embed the entityId in the service string so that CAS Server
 can use the entityId when evaluating a service registry entry match. Using serviceIds of something like:
-`https://shibserver.example.edu/idp/Authn/ExtCas\?conversation=[a-z0-9]*&entityId=http://testsp.school.edu/sp`
+`https://shibserver\\.example\\.edu/idp/Authn/External\\?(?=(?:[^&]*&)*entityId=https://testsp\\.school\\.edu/sp([/&]|$)).*$`
 or
-`https://shibserver.example.edu/idp/Authn/ExtCas\?conversation=[a-z0-9]*&entityId=http://test.unicon.net/sp`
+`https://shibserver\\.example\\.edu/idp/Authn/External\\?(?=(?:[^&]*&)*entityId=https://testsp\\.renater\\.fr/sp([/&]|$)).*$`
 will match as two different entries in the service registry which will allow as CAS admin to enable MFA or use access strategies on an SP by SP basis.
 
 
@@ -132,9 +126,67 @@ idp.authn.External.supportedPrincipals = \
     saml2/https://refeds.org/profile/mfa
 ```
 
+#### REFEDS MFA Profile Configuration on Shibboleth SP
+
+This part of documentation is out of scope of the plugin but provided here for convenience.
+The SP
+* needs to request the `https://refeds.org/profile/mfa` authentication context class ref for the IdP to trigger the CAS MFA flow.
+* and must verify that the AuthnContextClassRef in the SAML assertion matches the requested context class, it reject responses that do not meet this requirement.
+
+For example, with Apache and mod_shib, the SP configuration would look like this:
+```
+  <Location />
+     AuthType shibboleth
+     ShibRequestSetting requireSession 1
+     # request the REFEDS MFA profile authn context class ref to trigger the CAS MFA flow in the plugin
+     ShibRequestSetting authnContextClassRef https://refeds.org/profile/mfa
+     <RequireAll>
+      # verify that the CAS assertion contains the expected authn context class ref, otherwise reject the response
+      require authnContextClassRef https://refeds.org/profile/mfa
+      require valid-user
+     </RequireAll>
+     # error page when the assertion does not contain the expected authn context class ref
+     # (e.g. because the user did not complete MFA, because of a misconfiguration, because url without the authn_method parameter, ...)
+     ErrorDocument 401 /errors/mfa-is-required.html
+  </Location>
+  <Location /errors>
+     AuthType none
+     require all granted
+  </Location>
+```
+
+Note that if the IdP selected for authentication (chosen on the Discovery Service, for example) does not support the REFEDS MFA profile,
+the SP will directly reject the user by redirecting them to an `opensaml::FatalProfileException` error page.
+Therefore, if you know that some IdPs in your federation do not support the REFEDS MFA profile,
+you may want to provide a more user-friendly error page by setting the `<Errors>` element in shibboleth2.xml.
+
+For example :
+```
+<Errors supportContact="support@example.org"
+        redirectErrors="https://sp-mfa.example.org/errors/saml-error.html" />
+```
+With saml-error.html like :
+```
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Authentication Error</h1>
+    <div id="msg">An error occurred during authentication.</div>
+    <script>
+      const p = new URLSearchParams(window.location.search);
+      const sub = p.get('statusCode2') || '';
+      if (sub.includes('NoAuthnContext')) {
+        document.getElementById('msg').textContent =
+          "Your institution does not support the Multi-Factor Authentication (MFA) required to access this service. Please contact your IT support.";
+      }
+    </script>
+  </body>
+</html>
+```
+
 Release Notes
 -------------------------------------------------------------
-See [here](https://github.com/Unicon/shib-cas-authn/releases/).
+See [here](https://github.com/Renater/shib-cas-authn/releases/).
 
 Developer Notes
 -------------------------------------------------------------
